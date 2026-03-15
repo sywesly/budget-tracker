@@ -137,14 +137,19 @@
   .txn-meta { display: flex; align-items: center; gap: 5px; margin-top: 3px; flex-wrap: wrap; }
   .txn-cat  { font-size: 0.63rem; color: var(--muted); }
   .txn-badge { font-size: 0.58rem; padding: 1px 6px; border-radius: 100px; letter-spacing: 0.05em; text-transform: uppercase; }
-  .badge-paid      { background: color-mix(in srgb, var(--paid)    15%, transparent); color: var(--paid); }
+  .badge-paid      { background: color-mix(in srgb, var(--muted)   15%, transparent); color: var(--muted); }
   .badge-unpaid    { background: color-mix(in srgb, var(--unpaid)  15%, transparent); color: var(--unpaid); }
-  .badge-received  { background: color-mix(in srgb, var(--income)  15%, transparent); color: var(--income); }
+  .badge-received  { background: color-mix(in srgb, var(--muted)   15%, transparent); color: var(--muted); }
   .badge-expected  { background: color-mix(in srgb, var(--accent2) 15%, transparent); color: var(--accent2); }
   .badge-recurring { background: color-mix(in srgb, var(--muted)   15%, transparent); color: var(--muted); }
   .txn-amount { font-family: var(--font-display); font-size: 1rem; letter-spacing: -0.01em; flex-shrink: 0; }
   .txn-item.income  .txn-amount { color: var(--income); }
   .txn-item.expense .txn-amount { color: var(--expense); }
+  /* Cleared items recede visually */
+  .txn-item.cleared::before  { background: var(--muted); }
+  .txn-item.cleared .txn-amount { color: var(--muted); }
+  .txn-item.cleared .txn-icon { background: color-mix(in srgb, var(--muted) 12%, transparent) !important; }
+  .txn-item.cleared .txn-desc { color: var(--muted); }
 
   /* ── RECURRING LIST ── */
   .rec-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; display: flex; align-items: center; gap: 12px; cursor: pointer; transition: all 0.15s; }
@@ -654,25 +659,25 @@ function renderDashboard(d) {
         <div class="card-value ${pos(d.carryover)} accent2">${fmt(d.carryover)}</div>
         <div class="card-sub">From previous month</div>
       </div>` : ""}
+      <div class="card accent-card">
+        <div class="card-label">Committed Balance</div>
+        <div class="card-value ${pos(d.committedBalance)} accent">${fmt(d.committedBalance)}</div>
+        <div class="card-sub">${hasCarryover?"Carryover + Received − All":"Received − All Expenses"}</div>
+      </div>
       <div class="card">
         <div class="card-label">Income Received</div>
         <div class="card-value positive">${fmt(d.totalIncomeReceived)}</div>
         <div class="card-sub">+${fmt(d.totalIncomeExpected)} expected</div>
       </div>
       <div class="card">
-        <div class="card-label">Total Paid</div>
-        <div class="card-value neutral">${fmt(d.totalPaid)}</div>
-        <div class="card-sub">${fmt(d.totalUnpaid)} unpaid</div>
-      </div>
-      <div class="card accent-card">
         <div class="card-label">Running Balance</div>
-        <div class="card-value ${pos(d.runningBalance)} accent">${fmt(d.runningBalance)}</div>
+        <div class="card-value ${pos(d.runningBalance)}">${fmt(d.runningBalance)}</div>
         <div class="card-sub">${hasCarryover?"Carryover + Received − Paid":"Received − Paid"}</div>
       </div>
       <div class="card">
-        <div class="card-label">Committed Balance</div>
-        <div class="card-value ${pos(d.committedBalance)}">${fmt(d.committedBalance)}</div>
-        <div class="card-sub">${hasCarryover?"Carryover + Received − All":"Received − All Expenses"}</div>
+        <div class="card-label">Total Paid</div>
+        <div class="card-value neutral">${fmt(d.totalPaid)}</div>
+        <div class="card-sub">${fmt(d.totalUnpaid)} unpaid</div>
       </div>
     </div>
     <div class="rollover-card">
@@ -689,6 +694,26 @@ function renderDashboard(d) {
 }
 
 // ── RENDER TRANSACTIONS ───────────────────────────────────────
+function sortTransactions(txns) {
+  // Group order: Income-Received=0, Income-Expected=1, Expense-Unpaid=2, Expense-Paid=3
+  function groupOrder(t) {
+    if (t.type === "Income"   && t.status === "Received") return 0;
+    if (t.type === "Income"   && t.status === "Expected") return 1;
+    if (t.type === "Expense"  && t.status === "Unpaid")   return 2;
+    if (t.type === "Expense"  && t.status === "Paid")     return 3;
+    return 4;
+  }
+  return [...txns].sort((a, b) => {
+    const gDiff = groupOrder(a) - groupOrder(b);
+    if (gDiff !== 0) return gDiff;
+    // Within group: oldest date first
+    const dateDiff = (a.date || "").localeCompare(b.date || "");
+    if (dateDiff !== 0) return dateDiff;
+    // Tie-break: largest amount first
+    return parseFloat(b.amount || 0) - parseFloat(a.amount || 0);
+  });
+}
+
 function renderTransactions() {
   const list = document.getElementById("txnList");
   let filtered = allTxns;
@@ -697,9 +722,11 @@ function renderTransactions() {
     list.innerHTML = `<div class="empty-state"><div class="empty-icon">○</div><p>No transactions yet.<br>Tap + Add to get started.</p></div>`;
     return;
   }
-  const icons = { Income:"↑", Expense:"↓" };
-  list.innerHTML = filtered.map(t => {
-    const cls = t.type === "Income" ? "income" : "expense";
+  const sorted = sortTransactions(filtered);
+  const icons  = { Income:"↑", Expense:"↓" };
+  list.innerHTML = sorted.map(t => {
+    const isCleared = t.status === "Paid" || t.status === "Received";
+    const cls = (t.type === "Income" ? "income" : "expense") + (isCleared ? " cleared" : "");
     const sb  = t.type === "Income"
       ? (t.status==="Received"?`<span class="txn-badge badge-received">received</span>`:`<span class="txn-badge badge-expected">expected</span>`)
       : (t.status==="Paid"?`<span class="txn-badge badge-paid">paid</span>`:`<span class="txn-badge badge-unpaid">unpaid</span>`);
