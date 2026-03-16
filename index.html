@@ -88,6 +88,12 @@
   .view.active { display: block; }
   @keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
 
+  /* ── DASH COLUMNS ── */
+  .dash-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+  .dash-col { display: flex; flex-direction: column; gap: 8px; }
+  .dash-col-label { font-size: 0.6rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); padding: 0 2px; }
+  .dash-col .card { margin: 0; }
+
   /* ── CARDS ── */
   .cards-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
   .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 13px; }
@@ -142,6 +148,8 @@
   .badge-received  { background: color-mix(in srgb, var(--muted)   15%, transparent); color: var(--muted); }
   .badge-expected  { background: color-mix(in srgb, var(--accent2) 15%, transparent); color: var(--accent2); }
   .badge-recurring { background: color-mix(in srgb, var(--muted)   15%, transparent); color: var(--muted); }
+  .badge-ccspend   { background: color-mix(in srgb, var(--accent2) 15%, transparent); color: var(--accent2); }
+  .badge-ccpayment { background: color-mix(in srgb, var(--warning) 15%, transparent); color: var(--warning); }
   .txn-amount { font-family: var(--font-display); font-size: 1rem; letter-spacing: -0.01em; flex-shrink: 0; }
   .txn-item.income  .txn-amount { color: var(--income); }
   .txn-item.expense .txn-amount { color: var(--expense); }
@@ -410,15 +418,22 @@
     <div class="form-row">
       <div class="form-group">
         <label class="form-label">Type</label>
-        <select class="form-select" id="txnType" onchange="updateStatusOptions()">
+        <select class="form-select" id="txnType" onchange="updateStatusOptions(); toggleCardField();">
           <option value="Expense">Expense</option>
           <option value="Income">Income</option>
+          <option value="CC Spend">CC Spend</option>
+          <option value="CC Payment">CC Payment</option>
         </select>
       </div>
       <div class="form-group">
         <label class="form-label">Amount</label>
         <input class="form-input" id="txnAmount" type="number" placeholder="0.00" min="0" step="0.01">
       </div>
+    </div>
+    <!-- Card field — shown for CC Spend and CC Payment only -->
+    <div class="form-group" id="cardFieldGroup" style="display:none">
+      <label class="form-label">Card</label>
+      <input class="form-input" id="txnCard" placeholder="e.g. BPI, HSBC">
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -445,6 +460,12 @@
           <option value="Yes">Yes</option>
         </select>
       </div>
+    </div>
+    <!-- Linked CC Payment info (shown when viewing a CC Spend) -->
+    <div id="linkedPaymentSection" style="display:none">
+      <hr style="border:none;border-top:1px solid var(--border);margin:14px 0">
+      <div class="form-label" style="margin-bottom:8px">Linked CC Payment</div>
+      <div id="linkedPaymentInfo" style="background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;font-size:0.78rem;color:var(--muted);line-height:1.6;"></div>
     </div>
     <div class="form-actions" id="txnActions">
       <button class="btn-secondary" onclick="closeModal('txnModal')">Cancel</button>
@@ -550,7 +571,7 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const GAS_URL = "https://script.google.com/macros/s/AKfycbzlcUkRT3LJmhBKdADYpxindJUDvUaKzmcZXvGVyEZYads7fm0pDNV-Gu7RnW5sr8su/exec"; // ← Replace this
+const GAS_URL = "https://script.google.com/macros/s/AKfycbxVDS7_R_db-lIYafP0VfBObfgadNr9KVqYIyXL9D9gkA4X6rb-sRbFaPjbhhMcyMLB/exec"; // ← Replace this
 
 // ── STATE ─────────────────────────────────────────────────────
 let currentMonth  = getTodayMonth();
@@ -650,38 +671,52 @@ function renderDashboard(d) {
   }
   const fmt = n => "₱" + Number(n||0).toLocaleString("en-PH", { minimumFractionDigits:2, maximumFractionDigits:2 });
   const pos = n => n >= 0 ? "positive" : "negative";
-  const hasCarryover = d.carryover && d.carryover !== 0;
 
   el.innerHTML = `
-    <div class="cards-grid">
-      ${hasCarryover ? `<div class="card carryover-card">
-        <div class="card-label">Carried Forward</div>
-        <div class="card-value ${pos(d.carryover)} accent2">${fmt(d.carryover)}</div>
-        <div class="card-sub">From previous month</div>
-      </div>` : ""}
-      <div class="card accent-card">
-        <div class="card-label">Committed Balance</div>
-        <div class="card-value ${pos(d.committedBalance)} accent">${fmt(d.committedBalance)}</div>
-        <div class="card-sub">${hasCarryover?"Carryover + Received − All":"Received − All Expenses"}</div>
+    <div class="dash-columns">
+      <div class="dash-col">
+        <div class="dash-col-label">Income</div>
+        <div class="card accent-card">
+          <div class="card-label">Committed Balance</div>
+          <div class="card-value ${pos(d.committedBalance)} accent">${fmt(d.committedBalance)}</div>
+          <div class="card-sub">Received + Carryover − All Expenses</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Running Balance</div>
+          <div class="card-value ${pos(d.runningBalance)}">${fmt(d.runningBalance)}</div>
+          <div class="card-sub">Received + Carryover − Paid</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Total Income</div>
+          <div class="card-value positive">${fmt(d.totalIncome)}</div>
+          <div class="card-sub">Expected + Received + Carryover</div>
+        </div>
       </div>
-      <div class="card">
-        <div class="card-label">Income Received</div>
-        <div class="card-value positive">${fmt(d.totalIncomeReceived)}</div>
-        <div class="card-sub">+${fmt(d.totalIncomeExpected)} expected</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Running Balance</div>
-        <div class="card-value ${pos(d.runningBalance)}">${fmt(d.runningBalance)}</div>
-        <div class="card-sub">${hasCarryover?"Carryover + Received − Paid":"Received − Paid"}</div>
-      </div>
-      <div class="card">
-        <div class="card-label">Total Paid</div>
-        <div class="card-value neutral">${fmt(d.totalPaid)}</div>
-        <div class="card-sub">${fmt(d.totalUnpaid)} unpaid</div>
+      <div class="dash-col">
+        <div class="dash-col-label">Expenses</div>
+        <div class="card">
+          <div class="card-label">Running Unpaid</div>
+          <div class="card-value ${pos(-d.totalUnpaid) === 'positive' ? 'neutral' : 'negative'}">${fmt(d.totalUnpaid)}</div>
+          <div class="card-sub">All marked unpaid</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Total Paid</div>
+          <div class="card-value neutral">${fmt(d.totalPaid)}</div>
+          <div class="card-sub">All marked paid</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Total Expenses</div>
+          <div class="card-value neutral">${fmt(d.totalAllExpenses)}</div>
+          <div class="card-sub">Paid + Unpaid</div>
+        </div>
       </div>
     </div>
     <div class="rollover-card">
-      <div class="card-label">Estimated Rollover → Next Month</div>
+      <div class="card-label">Rollover Summary</div>
+      <div class="rollover-row">
+        <div class="rollover-row-label">Carried Forward<small>From previous month</small></div>
+        <div class="rollover-row-value ${pos(d.carryover||0)}">${fmt(d.carryover||0)}</div>
+      </div>
       <div class="rollover-row">
         <div class="rollover-row-label">Conservative<small>Received income only</small></div>
         <div class="rollover-row-value ${pos(d.rolloverConservative)}">${fmt(d.rolloverConservative)}</div>
@@ -695,21 +730,21 @@ function renderDashboard(d) {
 
 // ── RENDER TRANSACTIONS ───────────────────────────────────────
 function sortTransactions(txns) {
-  // Group order: Income-Received=0, Income-Expected=1, Expense-Unpaid=2, Expense-Paid=3
+  // Group order:
+  // 0 = Income Received, 1 = Income Expected
+  // 2 = Expense/CC Unpaid, 3 = Expense/CC Paid
   function groupOrder(t) {
-    if (t.type === "Income"   && t.status === "Received") return 0;
-    if (t.type === "Income"   && t.status === "Expected") return 1;
-    if (t.type === "Expense"  && t.status === "Unpaid")   return 2;
-    if (t.type === "Expense"  && t.status === "Paid")     return 3;
+    if (t.type === "Income"      && t.status === "Received") return 0;
+    if (t.type === "Income"      && t.status === "Expected") return 1;
+    if ((t.type === "Expense" || t.type === "CC Spend" || t.type === "CC Payment") && t.status === "Unpaid") return 2;
+    if ((t.type === "Expense" || t.type === "CC Spend" || t.type === "CC Payment") && t.status === "Paid")   return 3;
     return 4;
   }
   return [...txns].sort((a, b) => {
     const gDiff = groupOrder(a) - groupOrder(b);
     if (gDiff !== 0) return gDiff;
-    // Within group: oldest date first
     const dateDiff = (a.date || "").localeCompare(b.date || "");
     if (dateDiff !== 0) return dateDiff;
-    // Tie-break: largest amount first
     return parseFloat(b.amount || 0) - parseFloat(a.amount || 0);
   });
 }
@@ -723,20 +758,28 @@ function renderTransactions() {
     return;
   }
   const sorted = sortTransactions(filtered);
-  const icons  = { Income:"↑", Expense:"↓" };
   list.innerHTML = sorted.map(t => {
+    const isCC      = t.type === "CC Spend" || t.type === "CC Payment";
+    const isIncome  = t.type === "Income";
     const isCleared = t.status === "Paid" || t.status === "Received";
-    const cls = (t.type === "Income" ? "income" : "expense") + (isCleared ? " cleared" : "");
-    const sb  = t.type === "Income"
-      ? (t.status==="Received"?`<span class="txn-badge badge-received">received</span>`:`<span class="txn-badge badge-expected">expected</span>`)
-      : (t.status==="Paid"?`<span class="txn-badge badge-paid">paid</span>`:`<span class="txn-badge badge-unpaid">unpaid</span>`);
-    const rb  = t.recurring==="Yes"?`<span class="txn-badge badge-recurring">↻</span>`:"";
-    const amt = "₱"+Number(t.amount||0).toLocaleString("en-PH",{minimumFractionDigits:2});
+    const cls       = (isIncome ? "income" : "expense") + (isCleared ? " cleared" : "");
+    const icon      = isIncome ? "↑" : t.type === "CC Spend" ? "₵" : t.type === "CC Payment" ? "⊕" : "↓";
+
+    const statusBadge = isIncome
+      ? (t.status==="Received" ? `<span class="txn-badge badge-received">received</span>` : `<span class="txn-badge badge-expected">expected</span>`)
+      : (t.status==="Paid"     ? `<span class="txn-badge badge-paid">paid</span>`          : `<span class="txn-badge badge-unpaid">unpaid</span>`);
+
+    const ccBadge   = t.type === "CC Spend"   ? `<span class="txn-badge badge-ccspend">CC</span>`
+                    : t.type === "CC Payment" ? `<span class="txn-badge badge-ccpayment">CC Pay</span>` : "";
+    const cardLabel = (isCC && t.card)        ? `<span class="txn-cat" style="color:var(--accent2)">${t.card}</span>` : `<span class="txn-cat">${t.category||"—"}</span>`;
+    const rb        = t.recurring==="Yes"     ? `<span class="txn-badge badge-recurring">↻</span>` : "";
+    const amt       = "₱" + Number(t.amount||0).toLocaleString("en-PH", { minimumFractionDigits:2 });
+
     return `<div class="txn-item ${cls}" onclick="openTxnModal('${t.id}')">
-      <div class="txn-icon">${icons[t.type]||"·"}</div>
+      <div class="txn-icon">${icon}</div>
       <div class="txn-body">
         <div class="txn-desc">${t.description||"—"}</div>
-        <div class="txn-meta"><span class="txn-cat">${t.category||"—"}</span>${sb}${rb}</div>
+        <div class="txn-meta">${cardLabel}${statusBadge}${ccBadge}${rb}</div>
       </div>
       <div class="txn-amount">${amt}</div>
     </div>`;
@@ -774,6 +817,7 @@ function openTxnModal(id=null) {
   const isEdit = !!id;
   document.getElementById("txnModalTitle").textContent = isEdit ? "Edit Transaction" : "Add Transaction";
   document.getElementById("templateSection").style.display = isEdit ? "none" : "block";
+  document.getElementById("linkedPaymentSection").style.display = "none";
   if (!isEdit) renderTemplateChips();
   const actions = document.getElementById("txnActions");
   if (isEdit) {
@@ -784,12 +828,23 @@ function openTxnModal(id=null) {
     document.getElementById("txnCat").value       = t.category||"";
     document.getElementById("txnDate").value      = t.date||"";
     document.getElementById("txnRecurring").value = t.recurring||"No";
+    document.getElementById("txnCard").value      = t.card||"";
     updateStatusOptions(t.status);
+    toggleCardField();
+
+    // Show linked CC Payment info if this is a CC Spend
+    if (t.type === "CC Spend" && t.notes && t.notes.startsWith("linked_payment:")) {
+      const linkedId = t.notes.replace("linked_payment:", "");
+      showLinkedPayment(linkedId);
+    }
+
     actions.innerHTML = `<button class="btn-danger" onclick="deleteTxn('${id}')">Delete</button><button class="btn-secondary" onclick="closeModal('txnModal')">Cancel</button><button class="btn-primary" onclick="saveTxn()">Save</button>`;
   } else {
     document.getElementById("txnDesc").value=""; document.getElementById("txnType").value="Expense";
     document.getElementById("txnAmount").value=""; document.getElementById("txnCat").value="";
-    setTodayDate(); document.getElementById("txnRecurring").value="No"; updateStatusOptions();
+    document.getElementById("txnCard").value="";
+    setTodayDate(); document.getElementById("txnRecurring").value="No";
+    updateStatusOptions(); toggleCardField();
     actions.innerHTML = `<button class="btn-secondary" onclick="closeModal('txnModal')">Cancel</button><button class="btn-primary" onclick="saveTxn()">Save</button>`;
   }
   document.getElementById("txnModal").classList.add("open");
@@ -804,19 +859,62 @@ function renderTemplateChips() {
 }
 function fillFromTemplate(id) {
   const r = allRec.find(x => x.id===id); if (!r) return;
-  document.getElementById("txnDesc").value=r.description;
-  document.getElementById("txnType").value=r.type;
-  document.getElementById("txnAmount").value=r.amount;
-  document.getElementById("txnCat").value=r.category;
-  document.getElementById("txnRecurring").value="Yes";
+  document.getElementById("txnDesc").value      = r.description;
+  document.getElementById("txnType").value      = r.type;
+  document.getElementById("txnAmount").value    = r.amount;
+  document.getElementById("txnCat").value       = r.category;
+  document.getElementById("txnRecurring").value = "Yes";
+  document.getElementById("txnCard").value      = "";
   updateStatusOptions();
+  toggleCardField();
 }
+function toggleCardField() {
+  const type = document.getElementById("txnType").value;
+  const show = type === "CC Spend" || type === "CC Payment";
+  document.getElementById("cardFieldGroup").style.display = show ? "block" : "none";
+}
+
+function showLinkedPayment(linkedId) {
+  // Search all months loaded — try current month first, then look in allTxns
+  // Since CC Payment is in next month, we fetch it directly
+  const section = document.getElementById("linkedPaymentSection");
+  const info    = document.getElementById("linkedPaymentInfo");
+  section.style.display = "block";
+  info.textContent = "Loading…";
+
+  // Try to find in currently loaded transactions first
+  const found = allTxns.find(t => t.id === linkedId);
+  if (found) {
+    renderLinkedPaymentInfo(found, info);
+  } else {
+    // Fetch next month's transactions
+    const [y, m] = currentMonth.split("-").map(Number);
+    const next   = new Date(y, m, 1);
+    const nextMonth = next.getFullYear() + "-" + String(next.getMonth()+1).padStart(2,"0");
+    api({ action: "getTransactions", month: nextMonth }).then(data => {
+      const t = (data.transactions||[]).find(t => t.id === linkedId);
+      if (t) renderLinkedPaymentInfo(t, info);
+      else info.textContent = "Linked payment not found";
+    });
+  }
+}
+
+function renderLinkedPaymentInfo(t, el) {
+  const fmt  = n => "₱" + Number(n||0).toLocaleString("en-PH", { minimumFractionDigits:2 });
+  const month = (t.date||"").substring(0,7);
+  const [y,m] = month.split("-").map(Number);
+  const label = new Date(y,m-1,1).toLocaleDateString("en-US",{month:"long",year:"numeric"});
+  el.innerHTML = `<span style="color:var(--text)">${t.description}</span><br>Due: ${label} &nbsp;·&nbsp; ${fmt(t.amount)} &nbsp;·&nbsp; <span style="color:${t.status==='Paid'?'var(--income)':'var(--unpaid)'}">${t.status}</span>`;
+}
+
 function updateStatusOptions(currentStatus) {
   const type = document.getElementById("txnType").value;
   const sel  = document.getElementById("txnStatus");
-  sel.innerHTML = type === "Income"
-    ? `<option value="Expected">Expected</option><option value="Received">Received</option>`
-    : `<option value="Unpaid">Unpaid</option><option value="Paid">Paid</option>`;
+  if (type === "Income") {
+    sel.innerHTML = `<option value="Expected">Expected</option><option value="Received">Received</option>`;
+  } else {
+    sel.innerHTML = `<option value="Unpaid">Unpaid</option><option value="Paid">Paid</option>`;
+  }
   if (currentStatus) sel.value = currentStatus;
 }
 async function saveTxn() {
@@ -828,12 +926,30 @@ async function saveTxn() {
     date:        document.getElementById("txnDate").value,
     status:      document.getElementById("txnStatus").value,
     recurring:   document.getElementById("txnRecurring").value,
+    card:        document.getElementById("txnCard").value.trim(),
   };
   if (!data.description||!data.amount||!data.date) { showToast("Please fill in all required fields","error"); return; }
   closeModal("txnModal");
   try {
-    if (editingTxnId) { data.id=editingTxnId; await apiWrite("updateTransaction",data); showToast("Transaction updated ✓","success"); }
-    else { await apiWrite("addTransaction",data); showToast("Transaction added ✓","success"); }
+    if (editingTxnId) {
+      const existing = allTxns.find(t => t.id === editingTxnId);
+      data.id    = editingTxnId;
+      data.notes = existing?.notes || "";
+      await apiWrite("updateTransaction", data);
+      showToast("Transaction updated ✓","success");
+    } else if (data.type === "CC Spend") {
+      const res = await apiWrite("addTransaction", data);
+      if (res.success) {
+        const [y, m] = data.date.substring(0,7).split("-").map(Number);
+        const nextDate = new Date(y, m, 1);
+        const label = nextDate.toLocaleDateString("en-US",{month:"long",year:"numeric"});
+        showToast(`CC Spend added ✓ — payment queued for ${label}`,"success");
+      }
+    } else {
+      data.notes = "";
+      await apiWrite("addTransaction", data);
+      showToast("Transaction added ✓","success");
+    }
     await Promise.all([loadDashboard(),loadTransactions()]);
   } catch(e) { showToast("Save failed — try again","error"); }
 }
